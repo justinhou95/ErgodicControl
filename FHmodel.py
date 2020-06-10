@@ -23,7 +23,7 @@ def NN_plot(nn):
     plt.plot(xgrid,y)
     plt.grid()
     
-class BSDE:
+class MODEL:
     restart_times = 0
     def __init__(self,steps,dt,T,M):
         self.steps = steps
@@ -31,10 +31,8 @@ class BSDE:
         self.sqrtdt = np.sqrt(self.dt)
         self.T = self.steps * self.dt
         self.M = M
-    def nn(self,unn,Vnn,rhonn):
+    def nn(self,unn):
         self.unn = unn
-        self.Vnn = Vnn
-        self.rhonn = rhonn
     def start(self,X0):
         self.X0 = X0
     def traindata(self,seed):
@@ -49,7 +47,6 @@ class BSDE:
         loss = tf.zeros_like(X_now)
         bsde = tf.zeros_like(X_now)
         loss_output = [loss]
-        rho = self.rhonn(tf.zeros_like(X_now))
         for i in range(self.steps):
             input_dW = keras.Input(shape=(1))
             inputs = inputs + [input_dW]
@@ -58,12 +55,9 @@ class BSDE:
             loss_tmp = (tf.math.square(X_now) + tf.math.square(u_now))*self.dt
             loss_output = loss_output + [loss_tmp]
             loss = loss + loss_tmp
-            bsde_tmp = -2*tf.multiply(u_now,input_dW)
-            bsde = bsde + bsde_tmp
             X_now = X_next
-        outputs = loss - bsde - self.T + tf.math.square(X_now) - tf.math.square(X_start)
-        control_optimal = keras.Model(inputs=inputs, outputs = outputs, name = 'control_optimal')
-        self.optnn = control_optimal
+        self.optnn = keras.Model(inputs=inputs, outputs = loss/self.T, name = 'control_optimal')
+        self.opt_endnn = keras.Model(inputs=inputs, outputs = X_now, name = 'control_optimal')
         
         # Build the main network
         input_x = keras.Input(shape=(1))
@@ -73,7 +67,6 @@ class BSDE:
         loss = tf.zeros_like(X_now)
         bsde = tf.zeros_like(X_now)
         loss_output = [loss]
-        rho = self.rhonn(tf.zeros_like(X_now))
         for i in range(self.steps):
             input_dW = keras.Input(shape=(1))
             inputs = inputs + [input_dW]
@@ -86,44 +79,30 @@ class BSDE:
             bsde_tmp = -2*tf.multiply(u_now,input_dW)
             bsde = bsde + bsde_tmp
             X_now = X_next
-        outputs = loss - bsde - self.T * rho + self.Vnn(X_now) - self.Vnn(X_start)
-        control_main = keras.Model(inputs=inputs, outputs = outputs, name = 'control_main')
-        control_terminal = keras.Model(inputs=inputs, outputs = X_now, name = 'control_terminal')
-        control_loss = keras.Model(inputs=inputs, outputs = loss_output, name = 'control_loss')
-        self.mainnn = control_main
-        self.endnn = control_terminal
-        self.lossnn = control_loss
+        
+        self.mainnn = keras.Model(inputs=inputs, outputs = loss/self.T, name = 'control_main')
+        self.endnn = keras.Model(inputs=inputs, outputs = X_now, name = 'control_terminal')
+        
     def plot_compare(self):
-        NN_plot(self.Vnn)
         xgrid = np.linspace(-10,10,201)
-        plt.plot(xgrid, xgrid**2)
-        plt.show()
         NN_plot(self.unn)
         plt.plot(xgrid, -xgrid)
         plt.show()
-        tmp = self.rhonn.predict(np.zeros(1))[0,0]
-        print('Optimal ergodic cost is: ',tmp)
     def end(self):
         self.endnn.compile(loss = 'mse')
         self.Xend = self.endnn.predict(self.x_train)
-    def endtostart(self):
-        self.end()
-        self.restart_times += 1
-        self.X0 = np.random.normal(self.Xend.mean(),self.Xend.std(),size = (self.M,1))
-        self.x_train, self.y_train = trainning_data(10*self.restart_times+1,self.X0,self.M,self.steps,self.dt)
-        self.x_valid, self.y_valid = trainning_data(10*self.restart_times+2,self.X0,self.M,self.steps,self.dt)
+#     def endtostart(self):
+#         self.end()
+#         self.restart_times += 1
+#         self.X0 = np.random.normal(self.Xend.mean(),self.Xend.std(),size = (self.M,1))
+#         self.x_train, self.y_train = trainning_data(10*self.restart_times+1,self.X0,self.M,self.steps,self.dt)
+#         self.x_valid, self.y_valid = trainning_data(10*self.restart_times+2,self.X0,self.M,self.steps,self.dt)
     def optimal(self):
-        self.optnn.compile(loss = square_loss , optimizer = 'Adam')
-        self.tureoptimal = self.optnn.evaluate(self.x_train,self.y_train, verbose = 0)
-        print('Loss under optimal control: ', self.tureoptimal)
-    def train(self, epo = 20, opt = 'Adam', verb = 1):
-        self.mainnn.compile(loss = square_loss , optimizer = opt)
+        self.optnn.compile(loss = 'mean_absolute_error')
+        tmp = self.optnn.evaluate(self.x_train, self.y_train)
+        print('Cost under optimal ergodic control: ', tmp)
+    def train(self, epo = 20, verb = 1):
+        self.mainnn.compile(loss = 'mean_absolute_error')
         self.mainnn.fit(self.x_train,self.y_train,epochs =epo,\
                         validation_data = (self.x_valid,self.y_valid), verbose = verb)
-    def autotrain(self, epo = 20, opt = 'Adam', verb = 1):
-        self.optimal()
-        self.train(epo = epo, opt = opt, verb = verb)
-        self.plot_compare()
-        self.end()
-        print('Mean and Var of terminal distribution: ',self.Xend.mean(), self.Xend.var())
-
+        
