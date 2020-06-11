@@ -1,0 +1,15 @@
+$$a = 2(\sqrt{2} - 1)$$
+
+$$b = 2 - \sqrt{2}$$
+
+$$rho = \frac{2\sqrt{2} - 1}{2}$$
+
+$$mean =  \frac{1}{2}$$
+
+$$var =  \frac{1}{2\sqrt{2}}$$
+
+$$E[X] = \frac{1}{2}$$
+
+$$E[X^2] = \frac{\sqrt{2}+1}{4}$$
+
+$$\mathcal{N}(\frac{2-b}{a+2}, \frac{1}{a+2})$$
