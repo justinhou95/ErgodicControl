@@ -13,7 +13,7 @@ def initial_control_NN():
     outputs = l1(inputs)
     outputs = l2(outputs)
     outputs = l3(outputs)
-    control_NN = keras.Model(inputs=inputs, outputs=outputs, name = 'control_NN')
+    control_NN = keras.Model(inputs=inputs, outputs=outputs)
     # control_NN.summary()
 #     NN_plot(control_NN)
 #     plt.title('control NN')
@@ -34,25 +34,20 @@ def initial_value_NN():
     outputs0 = l2(outputs0)
     outputs0 = l3(outputs0)
     outputs = outputs - outputs0
-    value_NN = keras.Model(inputs=inputs, outputs=outputs, name = 'value_NN')
+#     outputs = tf.math.square(inputs)
+    value_NN = keras.Model(inputs=inputs, outputs=outputs)
     # value_NN.summary()
 #     NN_plot(value_NN)
 #     plt.title('value NN')
 #     plt.show()
     return value_NN
 
-def initial_rho_NN():
-    # optimal value: rho
-    inputs = keras.Input(shape=(1))
-    l= layers.Dense(1, activation = 'linear')
-    outputs = l(inputs)
-    rho_NN = keras.Model(inputs=inputs, outputs=outputs, name = 'rho')
-    # rho_NN.summary()
-#     print('rho_NN: ',rho_NN.predict(np.zeros(1))[0,0])
-    return rho_NN
-
 def square_loss(target_y, predicted_y):
     return tf.reduce_mean(tf.math.square(predicted_y - target_y))
+custom_optimizer = keras.optimizers.Adam(learning_rate = 0.01)
+
+def mean_loss(target_y, predicted_y):
+    return tf.reduce_mean(predicted_y - target_y)
 
 custom_optimizer = keras.optimizers.Adam(learning_rate = 0.01)
 
@@ -106,10 +101,11 @@ class MODEL:
                 return a*x**2/2 + b*x
             self.value_optimal = value_optimal
             self.rho_optimal = (2*np.sqrt(2) - 1)/2
-    def nn(self):
+    def nn(self):              # Here rho is not a neural network
         self.unn = initial_control_NN()
-        self.Vnn = initial_value_NN()
-        self.rhonn = initial_rho_NN()
+        self.Vnn1 = initial_value_NN()
+        self.Vnn2 = initial_value_NN()
+        self.rhon = 1
     def start(self,X0):
         self.X0 = X0
     def traindata(self,seed):
@@ -122,9 +118,7 @@ class MODEL:
         X_start = input_x
         X_now = X_start
         loss = tf.zeros_like(X_now)
-        bsde = tf.zeros_like(X_now)
         loss_output = [loss]
-        rho = self.rhonn(tf.zeros_like(X_now))
         for i in range(self.steps):
             input_dW = keras.Input(shape=(1))
             inputs = inputs + [input_dW]
@@ -133,12 +127,13 @@ class MODEL:
             loss_tmp = (tf.math.square(X_now) + tf.math.square(u_now))*self.dt
             loss_output = loss_output + [loss_tmp]
             loss = loss + loss_tmp
-            bsde_tmp = -2*tf.multiply(u_now,input_dW)
-            bsde = bsde + bsde_tmp
             X_now = X_next
-        outputs = loss - self.rho_optimal * self.T + self.value_optimal(X_now) - self.value_optimal(X_start) - bsde
-        control_optimal = keras.Model(inputs=inputs, outputs = outputs, name = 'control_optimal')
-        self.optnn = control_optimal
+        outputs1 = (loss + self.value_optimal(X_now) - self.value_optimal(X_start))/self.T
+        outputs2 = (loss + self.value_optimal(X_now) - self.value_optimal(X_start) - self.T*self.rho_optimal)**2
+        control_optimal1 = keras.Model(inputs=inputs, outputs = outputs1)
+        control_optimal2 = keras.Model(inputs=inputs, outputs = outputs2)
+        self.optnn1 = control_optimal1
+        self.optnn2 = control_optimal2
         
         # Build the main network
         input_x = keras.Input(shape=(1))
@@ -146,55 +141,69 @@ class MODEL:
         X_start = input_x
         X_now = X_start
         loss = tf.zeros_like(X_now)
-        bsde = tf.zeros_like(X_now)
         loss_output = [loss]
-        rho = self.rhonn(tf.zeros_like(X_now))
         for i in range(self.steps):
             input_dW = keras.Input(shape=(1))
             inputs = inputs + [input_dW]
             u_now = self.unn(X_now)
-        #     u_now = -0.5*d_value_NN(X_now)    #  Connect u with dV/dx 
             X_next  = X_now + input_dW + self.dynamic(u_now,X_now) * self.dt
             loss_tmp = (tf.math.square(X_now) + tf.math.square(u_now))*self.dt
             loss_output = loss_output + [loss_tmp]
             loss = loss + loss_tmp
-            bsde_tmp = -2*tf.multiply(u_now,input_dW)
-            bsde = bsde + bsde_tmp
             X_now = X_next
-        outputs = loss - self.T * rho + self.Vnn(X_now) - self.Vnn(X_start) - bsde
-        control_main = keras.Model(inputs=inputs, outputs = outputs, name = 'control_main')
-        control_terminal = keras.Model(inputs=inputs, outputs = X_now, name = 'control_terminal')
-        control_loss = keras.Model(inputs=inputs, outputs = loss_output, name = 'control_loss')
-        self.mainnn = control_main
+        outputs1 = (loss + self.Vnn1(X_now) - self.Vnn1(X_start))/self.T
+        outputs2 = (loss + self.Vnn1(X_now) - self.Vnn2(X_start) - self.T*self.rhon)**2
+        control_main1 = keras.Model(inputs=inputs, outputs = outputs1)
+        control_main2 = keras.Model(inputs=inputs, outputs = outputs2)
+        control_terminal = keras.Model(inputs=inputs, outputs = X_now)
+        control_loss = keras.Model(inputs=inputs, outputs = loss_output)
+        self.mainnn1 = control_main1
+        self.mainnn2 = control_main2
         self.endnn = control_terminal
         self.lossnn = control_loss
     def plot_compare(self):
-        NN_plot(self.Vnn)
+        NN_plot(self.Vnn1)
         xgrid = np.linspace(-10,10,201)
+        plt.plot(xgrid, self.value_optimal(xgrid))
+        plt.show()
+        NN_plot(self.Vnn2)
         plt.plot(xgrid, self.value_optimal(xgrid))
         plt.show()
         NN_plot(self.unn)
         plt.plot(xgrid, self.u_optimal(xgrid))
         plt.show()
-        tmp = self.rhonn.predict(np.zeros(1))[0,0]
-        print('Optimal ergodic cost is: ',tmp)
+        print('Optimal ergodic cost is: ',self.rhon)
     def end(self):
-        self.endnn.compile(loss = 'mse')
+        self.endnn.compile(loss = mean_loss)
         self.Xend = self.endnn.predict(self.x_train)
+    def optimal(self):
+        self.optnn1.compile(loss = mean_loss , optimizer = 'Adam')
+        tmp = self.optnn1.evaluate(self.x_train,self.y_train, verbose = 0)
+        print('Loss1 under optimal control: ', tmp)
+        self.optnn2.compile(loss = mean_loss , optimizer = 'Adam')
+        tmp = self.optnn2.evaluate(self.x_train,self.y_train, verbose = 0)
+        print('Loss2 under optimal control: ', tmp)
     def endtostart(self):
         self.end()
         self.restart_times += 1
         self.X0 = np.random.normal(self.Xend.mean(),self.Xend.std(),size = (self.M,1))
         self.x_train, self.y_train = trainning_data(10*self.restart_times+1,self.X0,self.M,self.steps,self.dt)
         self.x_valid, self.y_valid = trainning_data(10*self.restart_times+2,self.X0,self.M,self.steps,self.dt)
-    def optimal(self):
-        self.optnn.compile(loss = square_loss , optimizer = 'Adam')
-        self.tureoptimal = self.optnn.evaluate(self.x_train,self.y_train, verbose = 0)
-        print('Loss under optimal control: ', self.tureoptimal)
     def train(self, epo = 20, opt = 'Adam', verb = 1):
-        self.mainnn.compile(loss = square_loss , optimizer = opt)
-        self.mainnn.fit(self.x_train,self.y_train,epochs =epo,\
-                        validation_data = (self.x_valid,self.y_valid), verbose = verb)
+        for l in self.Vnn1.layers:
+            l.trainable = False
+        self.mainnn1.compile(loss = mean_loss , optimizer = 'Adam')
+        self.mainnn1.fit(self.x_train,self.y_train,epochs =20,\
+                                validation_data = (self.x_valid,self.y_valid), verbose = 1)
+        
+        self.rhon  = self.mainnn1.evaluate(self.x_valid, self.y_valid)
+        
+        self.mainnn2.compile(loss = mean_loss , optimizer = 'Adam')
+        self.mainnn2.fit(self.x_train,self.y_train,epochs =20,\
+                        validation_data = (self.x_valid,self.y_valid), verbose = 1)
+        self.Vnn1.set_weights(self.Vnn2.get_weights())
+        
+        
     def autotrain(self, epo = 20, opt = 'Adam', verb = 1):
         self.optimal()
         self.train(epo = epo, opt = opt, verb = verb)
