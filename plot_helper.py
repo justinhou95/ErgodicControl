@@ -10,9 +10,6 @@ import OUmodel
 reload(OUmodel)
 from mpl_toolkits import mplot3d 
 
-
-
-
 def NN_plot(nn):
     nn.compile(loss = 'mse')
     xgrid = np.linspace(-10,10,201)
